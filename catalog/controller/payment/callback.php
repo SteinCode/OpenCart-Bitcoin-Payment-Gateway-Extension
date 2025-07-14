@@ -41,7 +41,7 @@ class Callback extends Controller
                 exit;
             }
 
-            $orderIdRaw       = $callback->getOrderId();
+            $orderIdRaw       = $callback->getUuid();
             $order_id         = (int) explode('-', $orderIdRaw, 2)[0];
             $rawStatus        = $callback->getStatus();
             $order_info       = $this->model_checkout_order->getOrder($order_id);
