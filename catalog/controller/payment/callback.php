@@ -31,8 +31,34 @@ class Callback extends Controller
             $contentType = $_SERVER['CONTENT_TYPE'] ?? '';
             if (stripos($contentType, 'application/json') !== false) {
                 $callback = $this->initCallbackFromJson();
+                if (! $callback) {
+                    throw new InvalidArgumentException('Invalid JSON callback payload');
+                }
+
+                $project_id = $this->config->get('payment_spectrocoin_project');
+                $client_id = $this->config->get('payment_spectrocoin_client_id');
+                $client_secret = $this->config->get('payment_spectrocoin_client_secret');
+
+                $sc_merchant_client = new SCMerchantClient(
+                    $this->registry,
+                    $this->session,
+                    $project_id,
+                    $client_id,
+                    $client_secret
+                );
+
+                $order_data = $sc_merchant_client->getOrderById($callback->getUuid());
+
+                if (! is_array($order_data) || empty($order_data['orderId']) || empty($order_data['status'])) {
+                    throw new InvalidArgumentException('Malformed order data from API');
+                }
+
+                $order_id = explode('-', ($order_data['orderId']))[0];
+                $raw_status = $order_data['status'];
             } else {
                 $callback = $this->initCallbackFromPost();
+                $order_id = explode('-', ($callback->getOrderId()))[0];
+                $raw_status = $callback->getStatus();
             }
 
             if (!$callback) {
@@ -41,10 +67,9 @@ class Callback extends Controller
                 exit;
             }
 
-            $orderIdRaw       = $callback->getUuid();
-            $order_id         = (int) explode('-', $orderIdRaw, 2)[0];
-            $rawStatus        = $callback->getStatus();
-            $order_info       = $this->model_checkout_order->getOrder($order_id);
+            $order_id = (int) explode('-', $order_id, 2)[0];
+
+            $order_info = $this->model_checkout_order->getOrder($order_id);
 
             if (!$order_info) {
                 $this->log->write('SpectroCoin Error: Order not found - ' . $order_id);
@@ -52,7 +77,7 @@ class Callback extends Controller
                 exit;
             }
 
-            $statusEnum = OrderStatus::normalize($rawStatus);
+            $statusEnum = OrderStatus::normalize($raw_status);
             switch ($statusEnum) {
                 case OrderStatus::NEW:
                     break;
