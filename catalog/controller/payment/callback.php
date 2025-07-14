@@ -67,7 +67,6 @@ class Callback extends Controller
                 exit;
             }
 
-
             $order_id = (int) explode('-', $order_id, 2)[0];
 
             $order_info = $this->model_checkout_order->getOrder($order_id);
