@@ -13,8 +13,6 @@ use Opencart\Catalog\Controller\Extension\Spectrocoin\Payment\Enum\OrderStatus;
 use Exception;
 use InvalidArgumentException;
 
-use GuzzleHttp\Exception\RequestException;
-
 use Opencart\System\Engine\Controller;
 
 class Callback extends Controller
@@ -23,65 +21,77 @@ class Callback extends Controller
     {
         try {
             $this->load->model('checkout/order');
-            if ($_SERVER['REQUEST_METHOD'] != 'POST') {
+
+            if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
                 $this->log->write('SpectroCoin Error: Invalid request method, POST is required');
+                http_response_code(405);
                 exit;
             }
 
-            $order_callback = $this->initCallbackFromPost();
-            if (!$order_callback) {
-                $this->log->write('SpectroCoin Error: Invalid callback data');
-                exit;
-            }
-            $order_id = explode("-", ($order_callback->getOrderId()))[0];
-            $order = $this->model_checkout_order->getOrder($order_id);
-            $status = $order_callback->getStatus();
-            if ($order) {
-                switch ($status) {
-                    case OrderStatus::New->value:
-                        break;
-                    case OrderStatus::Pending->value:
-                        $this->model_checkout_order->addHistory($order_id, 2);
-                        break;
-                    case OrderStatus::Expired->value:
-                        $this->model_checkout_order->addHistory($order_id, 14);
-                        break;
-                    case OrderStatus::Failed->value:
-                        $this->model_checkout_order->addHistory($order_id, 7);
-                        break;
-                    case OrderStatus::Paid->value:
-                        $this->model_checkout_order->addHistory($order_id, 15);
-                        break;
-                    default:
-                        $this->log->write('SpectroCoin Callback: Unknown order status - ' . $status);
-                        echo 'Unknown order status: ' . $status;
-                        exit;
-                }
-                http_response_code(200);
-                echo '*ok*';
-                exit;
+            $contentType = $_SERVER['CONTENT_TYPE'] ?? '';
+            if (stripos($contentType, 'application/json') !== false) {
+                $callback = $this->initCallbackFromJson();
             } else {
-                $this->log->write('SpectroCoin Error: Order not found - Order ID: ' . $order_id);
-                http_response_code(404); // Not Found
+                $callback = $this->initCallbackFromPost();
+            }
+
+            if (!$callback) {
+                $this->log->write('SpectroCoin Error: Invalid callback data');
+                http_response_code(400);
                 exit;
             }
-        } catch (RequestException $e) {
-            $this->log->write("Callback API error: {$e->getMessage()}");
-            http_response_code(500); // Internal Server Error
-            echo esc_html__('Callback API error', 'spectrocoin-accepting-bitcoin');
+
+            $orderIdRaw       = $callback->getOrderId();
+            $order_id         = (int) explode('-', $orderIdRaw, 2)[0];
+            $rawStatus        = $callback->getStatus();
+            $order_info       = $this->model_checkout_order->getOrder($order_id);
+
+            if (!$order_info) {
+                $this->log->write('SpectroCoin Error: Order not found - ' . $order_id);
+                http_response_code(404);
+                exit;
+            }
+
+            $statusEnum = OrderStatus::normalize($rawStatus);
+            switch ($statusEnum) {
+                case OrderStatus::NEW:
+                    break;
+                case OrderStatus::PENDING:
+                    $this->model_checkout_order->addHistory($order_id, 2);
+                    break;
+                case OrderStatus::PAID:
+                    $this->model_checkout_order->addHistory($order_id, 15);
+                    break;
+                case OrderStatus::FAILED:
+                    $this->model_checkout_order->addHistory($order_id, 7);
+                    break;
+                case OrderStatus::EXPIRED:
+                    $this->model_checkout_order->addHistory($order_id, 14);
+                    break;
+                default:
+                    $this->log->write('SpectroCoin Callback: Unhandled status - ' . $statusEnum->value);
+                    http_response_code(500);
+                    exit;
+            }
+
+            http_response_code(200);
+            echo '*ok*';
             exit;
-        } catch (InvalidArgumentException $e) {
-            $this->log->write("Error processing callback: {$e->getMessage()}");
-            http_response_code(400); // Bad Request
-            echo esc_html__('Error processing callback', 'spectrocoin-accepting-bitcoin');
+        } catch (\JsonException $e) {
+            $this->log->write('SpectroCoin Error: JSON parse error - ' . $e->getMessage());
+            http_response_code(400);
             exit;
-        } catch (Exception $e) {
-            $this->log->write('error', "Error processing callback: {$e->getMessage()}");
-            http_response_code(500); // Internal Server Error
-            echo esc_html__('Error processing callback', 'spectrocoin-accepting-bitcoin');
+        } catch (\InvalidArgumentException $e) {
+            $this->log->write('SpectroCoin Error: Invalid callback data - ' . $e->getMessage());
+            http_response_code(400);
+            exit;
+        } catch (\Exception $e) {
+            $this->log->write('SpectroCoin Error: ' . $e->getMessage());
+            http_response_code(500);
             exit;
         }
     }
+
 
     /**
      * Initializes the callback data from POST (form-encoded) request.
